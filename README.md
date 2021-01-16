@@ -20,4 +20,6 @@ This **has not** been implemented:
 
 ## Caveats
 
+This software is really experimental and still in beta stage. I am using it locally in my own computer, but there is no warranty that it will not wipe out your entire Maildir spool.
+
 The backend should not access the mail spool while it is being updated by other programs. I suggest you configure Gnus to call `mbsync` or `offlineimap` prior to checking for new messages.
