@@ -26,9 +26,55 @@
 
 (defvoo nnmaild-get-new-mail t
   "If non-nil, nnmaild will check the incoming mail file and split the mail.")
+
+(defvoo nnmaild-cache nil
+  "Association list between group directory names and nnmaild--data
+structures, where we cache information about the messages. Only active
+when nnmaild-cache-strategy is not NIL.")
+
+(defvoo nnmaild-cache-strategy 'full
+  "Symbol determining how we cache information about the messages in Maildir.
+
+NIL means that we do not do any caching at all and every
+request implies loading the list of files and scanning the
+individual messages. This is risky and not recommended because
+the association between file names and article numbers is not
+preserved.
+
+FILE means that the cache is read from and saved to file with the
+name given by the variable nnmaild-data-file.
+
+MEMORY implies that the cache is preserved in memory for as long
+as the server remains open.
+
+FULL implies both FILE and MEMORY.")
+
+(defvoo nnmaild-cache-expiration-strategy 'identity
+  "Recipe to determine whether a previous cache of message
+information has expired and needs to be recreated.
+
+T means that we always consider that the cache has expired and
+refill it will a fresh new list of files, preseving the
+association between file names and message numbers.
+
+DIRECTORY-MTIME looks at the directory's modification time as a
+clue of whether messages have been created, deleted or
+renamed. Only then it tries to rebuild the cache.
+
+FILE-MTIME looks at a file with a name given by
+nnmaild-cache-control-file. If the modification time of that file
+is more recent than the cache's time stamp, the latter is
+rebuilt.")
+
+(defvoo nnmaild-cache-control-file ".mbsyncstate"
+  "If nnmaild-cache-expiration-strategy is FILE-MTIME, this is
+the name of the file whose modification time is used to check
+whether the cache has expired. The file name can be relative to
+the Maildir folder directory, or it can be an absolute file
+name.")
 
 
-(defconst nnmaild-version "nnmaild 0.1"
+(defconst nnmaild-version "nnmaild 0.2"
   "nnmaild version.")
 
 (defvoo nnmaild-current-directory nil)
@@ -43,12 +89,9 @@
 
 
 ;;; Data structures
-
 (cl-defstruct (nnmaild--data
-               (:constructor nnmaild--make-data (min max hash path))
-               ;; Makes it more easily printable
-               (:type list))
-  min max hash path)
+               (:constructor nnmaild--make-data (min max hash path mtime)))
+  min max hash path mtime)
 
 (defsubst nnmaild--allocate ()
   (cl-incf (nnmaild--data-max nnmaild--data)))
@@ -58,11 +101,13 @@
    (nnmaild--data-min data)
    (nnmaild--data-max data)
    (gnus-make-hashtable (hash-table-size (nnmaild--data-hash data)))
-   (nnmaild--data-path data)))
+   (nnmaild--data-path data)
+   (nnmaild--data-mtime data)))
 
 (defsubst nnmaild--make-empty-data (path &optional l)
   (nnmaild--make-data
-   1 0 (gnus-make-hashtable (* 2 (or l 10))) path))
+   1 0 (gnus-make-hashtable (* 2 (or l 10))) path
+   (current-time)))
 
 (defsubst nnmaild--data-size (data)
   (/ (hash-table-count (nnmaild--data-hash data)) 2))
@@ -131,6 +176,15 @@
 		             server nnmaild-directory)
     t)))
 
+(deffoo nnmaild-close-server (&optional server defs)
+  (and server
+       (nnmaild-possibly-change-directory nil server)
+       (nnmaild--clear-cache (nnmaild-group-pathname "" nil server))))
+
+(deffoo nnmaild-request-close ()
+  (nnmaild--clear-cache nil)
+  t)
+
 (deffoo nnmaild-request-regenerate (server)
   "Regenerate server information."
   t)
@@ -141,7 +195,7 @@ or a string with a mail ID."
   (nnmaild-possibly-change-directory group server)
   (let* ((nntp-server-buffer (or buffer nntp-server-buffer))
 	     (file-name-coding-system nnmail-pathname-coding-system)
-         (nnmaild--data (nnmaild--scan-group-dir nnmaild-current-directory 'fast))
+         (nnmaild--data (nnmaild--scan-group-dir nnmaild-current-directory))
          (article (if (numberp id)
                       id
 	                (or (nnmaild--data-find-id id)
@@ -149,7 +203,7 @@ or a string with a mail ID."
                           (dolist (pair nnmaild-group-alist nil)
                             (let* ((other-group (car pair))
                                    (group-path (nnmaild-group-pathname other-group nil server)))
-                              (setq nnmaild--data (nnmaild--scan-group-dir group-path 'fast))
+                              (setq nnmaild--data (nnmaild--scan-group-dir group-path))
                               (when-let ((article (nnmaild--data-find-id id)))
                                 (setq group other-group)
                                 (throw 'return article))))))))
@@ -197,11 +251,6 @@ number and highest message number."
 
 (deffoo nnmaild-request-group-scan (group &optional server info)
   (let ((nnmaild--data (nnmaild--load-and-update-info group info server)))
-    (nnheader-report 'nnmaild
-                     "Group scan: %s"
-                     (format
-	                  "211 %d %d %d %S\n" (nnmaild--size) (nnmaild--min) (nnmaild--max)
-	                  group))
     (with-current-buffer nntp-server-buffer
 	  (erase-buffer)
 	  (insert
@@ -237,7 +286,6 @@ number and highest message number."
   (save-excursion
     (nnmaild--map-group-dirs 'nnmaild-request-list-1 server dir)
     (setq nnmaild-group-alist (nnmail-get-active))
-    (message "Active list %S" nnmaild-group-alist)
     t))
 
 (defun nnmaild--map-group-dirs (fn server dir)
@@ -255,12 +303,6 @@ number and highest message number."
   (let* ((data (nnmaild--scan-group-dir group-dir)))
     (with-current-buffer nntp-server-buffer
       (goto-char (point-max))
-      (nnheader-report 'nnmaild
-                       "Group scan %s"
-                       (format "%s %.0f %.0f y\n"
-                               (file-name-nondirectory group-dir)
-                               (nnmaild--data-max data)
-                               (nnmaild--data-min data)))
       (insert (format "%s %.0f %.0f y\n"
                       (file-name-nondirectory group-dir)
                       (nnmaild--data-max data)
@@ -298,7 +340,6 @@ number and highest message number."
              (nnmaild--hash))))
 
 (deffoo nnmaild-request-update-mark (group article mark)
-  (nnheader-report 'nnmaild "Received mark %S for article %S" mark article)
   (let ((known-mark (cdr (assoc mark '((?R . (read))
                                        (?! . (tick)))))))
     (when known-mark
@@ -330,7 +371,7 @@ number and highest message number."
 
 (deffoo nnmaild-set-status (article name value &optional group server)
   (nnmaild-possibly-change-directory group server)
-  (let ((file (nnmaild-article-to-file article)))
+  (let ((file (nnmaild--data-article-to-file article)))
     (cond
      ((not (file-exists-p file))
       (nnheader-report 'nnmaild "File %s does not exist" file))
@@ -353,29 +394,11 @@ number and highest message number."
 	      (file-name-coding-system nnmail-pathname-coding-system))
       (when (not (equal pathname nnmaild-current-directory))
 	    (setq nnmaild-current-directory pathname
-	          nnmaild-current-group group
-	          nnmaild-article-file-alist nil))
+	          nnmaild-current-group group))
       (file-exists-p nnmaild-current-directory))))
 
 (defsubst nnmaild--article-to-prefix (article)
   (gethash article (nnmaild--hash) nil))
-
-(defun nnmaild--load-data (dir)
-  (let ((data-file (expand-file-name nnmaild-data-file dir))
-        (nnmaild--data nil))
-    (if (file-exists-p data-file)
-        (load data-file nil t t)
-      (nnheader-report 'nnmaild "Cache file %s does not exist" data-file))
-    nnmaild--data))
-
-(defun nnmaild--save-data (dir data)
-  (let ((data-file (expand-file-name nnmaild-data-file dir)))
-    (with-temp-file data-file
-      (insert ";; Gnus data file\n")
-      (insert "(setq nnmaild--data '")
-      (gnus-prin1 nnmaild--data)
-      (insert ")\n")))
-  nnmaild--data)
 
 (defconst nnmaild-flag-mark-mapping
   '((?F . tick)
@@ -508,27 +531,150 @@ See `nnmaildir-flag-mark-mapping'."
     (puthash prefix old-record (nnmaild--hash))
     (puthash article-number prefix (nnmaild--hash))))
 
-(defun nnmaild--scan-group-dir (group-dir &optional fast)
+(defun nnmaild--data-expired-p (data)
+  "Return true if the cache has expired and must be rebuilt. See
+nnmaild-cache-expiration-strategy for how this is determined"
+  (if (eq nnmaild-cache-expiration-strategy t)
+      t
+    (let ((path (nnmaild--data-path data)))
+      (or (nnmaild--load-new-messages path)
+          (let ((mtime (nnmaild--data-mtime data)))
+            (nnmaild--file-newer-than
+             (expand-file-name
+              (if (eq nnmaild-cache-expiration-strategy
+                      'directory-mtime)
+                  "cur"
+                nnmaild-cache-control-file)
+              path)
+             mtime))))))
+
+(defun nnmaild--load-new-messages (group-dir)
+  "Load any messages that are in the ./new folder into the ./cur folder,
+relative to group-dir. Return true if any file was moved."
+  (let* ((orig (expand-file-name "new" group-dir))
+         (files (nnheader-directory-files orig t "^[^.].+$" t)))
+    (when files
+      (let ((dest (expand-file-name "cur" group-dir)))
+        (dolist (f files)
+          (rename-file orig (expand-file-name (file-name-nondirectory orig)
+                                              dest)
+                       t)))
+      t)))
+
+(defun nnmaild--file-newer-than (file mtime)
+  "Return true if FILE has been modified past the time indicated
+by MTIME (see current-time for allowed values)."
+  (or (null mtime)
+      (when-let ((attr (file-attributes file)))
+        (time-less-p mtime (file-attribute-modification-time attr)))))
+
+(defun nnmaild--clear-cache (server-dir)
+  "Remove all records in the cache that are rooted inside the
+directory selected by SERVER-DIR. If SERVER-DIR is NIL, the whole
+cache is flushed."
+  (when nnmaild-cache
+    (let ((prefix (if server-dir
+                      (expand-file-name server-dir)
+                    "")))
+      (setq nnmaild-cache
+            (cl-remove-if (lambda (record)
+                            (when (string-prefix-p prefix (car record))
+                              ;; If the file was in memory and the strategy
+                              ;; is FULL, flush the cache to file
+                              (when (eq nnmaild-cache-strategy 'full)
+                                (nnmaild--save-data-file (cdr record)))
+                              t))
+                          nnmaild-cache)))))
+
+(defun nnmaild--data-from-cache (group-dir)
+  "Retrieve the nnmaild--data structure, either from memory or
+from file if the nnmaild-cache-strategy allows it."
+  (when nnmaild-cache-strategy
+    (cond ((eq nnmaild-cache-strategy 'full)
+           (or (cdr (assoc group-dir nnmaild-cache))
+               (nnmaild--load-data-file group-dir)))
+          ((eq nnmaild-cache-strategy 'memory)
+           (cdr (assoc group-dir nnmaild-cache)))
+          ((eq nnmaild-cache-strategy 'file)
+           (nnmaild--load-data-file group-dir))
+          )))
+
+(defun nnmaild--data-to-cache (data)
+  "Save the nnmaild--data structure, either to memory or to file if the
+nnmaild-cache-strategy allows it."
+  (when nnmaild-cache-strategy
+    (let ((group-dir (nnmaild--data-path data)))
+      (if (or (eq nnmaild-cache-strategy 'full)
+              (eq nnmaild-cache-strategy 'memory))
+          (let ((record (assoc group-dir nnmaild-cache)))
+            (if record
+                (rplacd record data)
+              (push (cons group-dir data) nnmaild-cache)))
+        (nnmaild--save-data-file data))))
+  data)
+
+(defun nnmaild--load-data-file (group-dir)
+  "Load the nnmaild--data information from a file with name given
+by nnmaild-data-file within the group directory. If the file does
+not exist, or the data is corrupt, return false. Otherwise,
+return an nnmaild--data structure."
+  (let* ((nnmaild--data nil)
+         (data-file (expand-file-name nnmaild-data-file group-dir))
+         (attr (file-attributes data-file)))
+    (if (null attr)
+        (nnheader-report 'nnmaild "Data file %s does not exist" data-file)
+      (load data-file nil t t)
+      (setf (nnmaild--data-path nnmaild--data) group-dir
+            (nnmaild--data-mtime nnmaild--data)
+            (file-attribute-modification-time attr)))
+    nnmaild--data))
+
+(defun nnmaild--save-data-file (data)
+  "Export our nnmaild--data information to a file with name given
+by nnmaild-data-file within the group directory."
+  (let* ((path (nnmaild--data-path data))
+         (data-file (expand-file-name nnmaild-data-file path)))
+    (with-temp-file data-file
+      (insert ";; Gnus data file\n")
+      (insert "(setq nnmaild--data '")
+      (gnus-prin1 data)
+      (insert ")\n")))
+  data)
+
+(defun nnmaild--data-update (old-data group-dir)
+  "Create a new nnmaild--data structure, updating the information from OLD-DATA
+with information gathered from the directory GROUP-DIR. This includes removing
+messages that have been deleted, updating the suffix of messages whose status
+has changed, and preemptively loading NOV structures, if absent."
   (let* ((files (nnheader-directory-files (expand-file-name "cur" group-dir)
                                           t "^[^.].+$" t))
-         (old-data (nnmaild--load-data group-dir)))
-    (if (and old-data fast)
-        old-data ;; Do not scan files, just retrieve last database
-      (let ((nnmaild--data
-             (if old-data
-                 (nnmaild--copy-data old-data)
-                 (nnmaild--make-empty-data (expand-file-name group-dir) (length files))))
-            (old-hash (and old-data (nnmaild--data-hash old-data)))
-            (regex (format "\\`\\([^%s]*\\)\\(\\(%s.*\\)?\\)\\'"
-                           nnmaild-flag-separator nnmaild-flag-separator)))
-        (dolist (path files)
-          (let ((f (file-name-nondirectory path)))
-            (when (string-match regex f)
-              (let* ((prefix (match-string 1 f))
-                     (suffix (match-string 2 f))
-                     (old-record (and old-hash (gethash prefix old-hash nil))))
-                (nnmaild--update-article-data path prefix suffix old-record)))))
-        (nnmaild--save-data group-dir nnmaild--data)))))
+         (nnmaild--data
+          (if old-data
+              (nnmaild--copy-data old-data)
+            (nnmaild--make-empty-data group-dir (length files))))
+         (old-hash (and old-data (nnmaild--data-hash old-data)))
+         (regex (format "\\`\\([^%s]*\\)\\(\\(%s.*\\)?\\)\\'"
+                        nnmaild-flag-separator nnmaild-flag-separator)))
+    (dolist (path files)
+      (let ((f (file-name-nondirectory path)))
+        (when (string-match regex f)
+          (let* ((prefix (match-string 1 f))
+                 (suffix (match-string 2 f))
+                 (old-record (and old-hash (gethash prefix old-hash nil))))
+            (nnmaild--update-article-data path prefix suffix old-record)))))
+    nnmaild--data))
+
+(defun nnmaild--scan-group-dir (group-dir)
+  "Return the nnmaild--data structure for the given group, either from the
+cache (see nnmaild-cache-strategy and nnmaild-cache-expiration-strategy),
+or by recreating it from scratch."
+  (let* ((group-dir (string-trim (expand-file-name group-dir) nil "[/\\]"))
+         (nnmaild--data (nnmaild--data-from-cache group-dir)))
+    (if (or (null nnmaild--data)
+            (nnmaild--data-expired-p nnmaild--data))
+        (nnmaild--data-to-cache
+         (nnmaild--data-update nnmaild--data group-dir))
+      nnmaild--data)))
 
 (defun nnmaild--article-prefix (article)
   (gethash article (nnmaild--hash)))
@@ -556,6 +702,8 @@ See `nnmaildir-flag-mark-mapping'."
              (record (gethash prefix hash nil)))
     (expand-file-name (concat "cur/" prefix (nnmaild--art-suffix record))
                       (nnmaild--data-path nnmaild--data))))
+
+(gnus-declare-backend "nnmaild" 'mail 'address)
 
 (provide 'nnmaild)
 
