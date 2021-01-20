@@ -279,6 +279,12 @@ number and highest message number."
   t)
 
 (deffoo nnmaild-request-create-group (group &optional server args)
+  "Create an empty GROUP in SERVER."
+  (nnmaild-possibly-change-directory nil server)
+  (let ((path (nnmaild-group-pathname group nil server)))
+    (unless (file-exists-p path)
+      (dolist (subdir '("cur" "new" "tmp"))
+        (gnus-make-directory (expand-file-name subdir path)))))
   nil)
 
 (deffoo nnmaild-request-list (&optional server dir)
