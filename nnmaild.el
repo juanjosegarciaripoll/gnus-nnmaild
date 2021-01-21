@@ -670,7 +670,9 @@ from file if the nnmaild-cache-strategy allows it."
   (when nnmaild-cache-strategy
     (cond ((eq nnmaild-cache-strategy 'full)
            (or (cdr (assoc group-dir nnmaild-cache))
-               (nnmaild--load-data-file group-dir)))
+               (let ((data (nnmaild--load-data-file group-dir)))
+                 (when data
+                   (nnmaild--data-to-cache data)))))
           ((eq nnmaild-cache-strategy 'memory)
            (cdr (assoc group-dir nnmaild-cache)))
           ((eq nnmaild-cache-strategy 'file)
