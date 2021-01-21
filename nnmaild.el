@@ -18,7 +18,7 @@
 (defvoo nnmaild-directory message-directory
   "Spool directory for the nnmaild mail backend.")
 
-(defvoo nnmaild-flag-separator (if (eq system-type 'windows-nt) "!" ":")
+(defvoo nnmaild-flag-separators (if (eq system-type 'windows-nt) ";!" ":")
   "Separator for maildir file names, to split the flags.")
 
 (defvoo nnmaild-data-file ".nnmaild-data.el"
@@ -314,6 +314,11 @@ number and highest message number."
   (let* ((data (nnmaild--scan-group-dir group-dir)))
     (with-current-buffer nntp-server-buffer
       (goto-char (point-max))
+      (nnheader-report 'nnmaild
+                       "%s %.0f %.0f y\n"
+                       (file-name-nondirectory group-dir)
+                       (nnmaild--data-max data)
+                       (nnmaild--data-min data))
       (insert (format "%s %.0f %.0f y\n"
                       (file-name-nondirectory group-dir)
                       (nnmaild--data-max data)
@@ -426,7 +431,7 @@ number and highest message number."
             (format-time-string "M%6N" time)
             (emacs-pid)
             (cl-incf nnmaild-delivery-count)
-            nnmaild-flag-separator)))
+            (nnmaild-flag-separator))))
 
 (deffoo nnmaild-request-post (&optional server)
   (nnmail-do-request-post 'nnmaild-request-accept-article server))
@@ -502,7 +507,7 @@ See `nnmaildir-flag-mark-mapping'."
       (cl-map 'list 'nnmaild--flag-to-mark flags))))
 
 (defun nnmaild--marks-to-suffix (marks)
-  (concat nnmaild-flag-separator "2,"
+  (concat (nnmaild-flag-separator) "2,"
           (cl-map 'string 'nnmaild--mark-to-flag marks)))
 
 (defun nnmaild--act-on-suffix (suffix action marks)
@@ -714,9 +719,12 @@ by nnmaild-data-file within the group directory."
       (insert ")\n")))
   data)
 
+(defsubst nnmaild--flag-separator ()
+  (substring nnmaild-flag-separators 0 1))
+
 (defsubst nnmaild--split-prefix-regex ()
-  (format "\\`\\([^%s]*\\)\\(\\(%s.*\\)?\\)\\'"
-          nnmaild-flag-separator nnmaild-flag-separator))
+  (format "\\`\\([^%s]*\\)\\(\\([%s].*\\)?\\)\\'"
+          nnmaild-flag-separators nnmaild-flag-separators))
 
 (defun nnmaild--data-update (old-data group-dir)
   "Create a new nnmaild--data structure, updating the information from OLD-DATA
