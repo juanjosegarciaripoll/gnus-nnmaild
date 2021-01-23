@@ -32,7 +32,7 @@
 structures, where we cache information about the messages. Only active
 when nnmaild-cache-strategy is not NIL.")
 
-(defvoo nnmaild-cache-strategy 'full
+(defvoo nnmaild-cache-strategy 'memory+file
   "Symbol determining how we cache information about the messages in Maildir.
 
 NIL means that we do not do any caching at all and every
@@ -47,20 +47,20 @@ name given by the variable nnmaild-data-file.
 MEMORY implies that the cache is preserved in memory for as long
 as the server remains open.
 
-FULL implies both FILE and MEMORY.")
+MEMORY+FILE implies both FILE and MEMORY.")
 
-(defvoo nnmaild-cache-expiration-strategy 'identity
+(defvoo nnmaild-cache-expiration-strategy 'directory-mtime
   "Recipe to determine whether a previous cache of message
 information has expired and needs to be recreated.
 
-T means that we always consider that the cache has expired and
-refill it will a fresh new list of files, preseving the
+T means that we always consider that the cache has expired
+and refill it will a fresh new list of files, preseving the
 association between file names and message numbers.
 
 DIRECTORY-MTIME looks at the directory's modification time as a
 clue of whether messages have been created, deleted or
 renamed. Only then it tries to rebuild the cache.
-
+s
 FILE-MTIME looks at a file with a name given by
 nnmaild-cache-control-file. If the modification time of that file
 is more recent than the cache's time stamp, the latter is
@@ -74,7 +74,7 @@ the Maildir folder directory, or it can be an absolute file
 name.")
 
 
-(defconst nnmaild-version "nnmaild 0.2"
+(defconst nnmaild-version "nnmaild 0.3"
   "nnmaild version.")
 
 (defvoo nnmaild-current-directory nil)
@@ -674,8 +674,8 @@ cache is flushed."
             (cl-remove-if (lambda (record)
                             (when (string-prefix-p prefix (car record))
                               ;; If the file was in memory and the strategy
-                              ;; is FULL, flush the cache to file
-                              (when (eq nnmaild-cache-strategy 'full)
+                              ;; is memory+file, flush the cache to file
+                              (when (eq nnmaild-cache-strategy 'memory+file)
                                 (nnmaild--save-data-file (cdr record)))
                               t))
                           nnmaild-cache)))))
@@ -684,7 +684,7 @@ cache is flushed."
   "Retrieve the nnmaild--data structure, either from memory or
 from file if the nnmaild-cache-strategy allows it."
   (when nnmaild-cache-strategy
-    (cond ((eq nnmaild-cache-strategy 'full)
+    (cond ((eq nnmaild-cache-strategy 'memory+file)
            (or (cdr (assoc group-dir nnmaild-cache))
                (let ((data (nnmaild--load-data-file group-dir)))
                  (when data
@@ -700,7 +700,7 @@ from file if the nnmaild-cache-strategy allows it."
 nnmaild-cache-strategy allows it."
   (when nnmaild-cache-strategy
     (let ((group-dir (nnmaild--data-path data)))
-      (if (or (eq nnmaild-cache-strategy 'full)
+      (if (or (eq nnmaild-cache-strategy 'memory+file)
               (eq nnmaild-cache-strategy 'memory))
           (let ((record (assoc group-dir nnmaild-cache)))
             (if record
