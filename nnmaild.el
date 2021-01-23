@@ -125,7 +125,7 @@ name.")
   (nnmaild--data-hash nnmaild--data))
 
 (defsubst nnmaild--size ()
-  (nnmaild--data-hash nnmaild--data))
+  (nnmaild--data-size nnmaild--data))
 
 (cl-defstruct (nnmaild--art
                (:constructor nnmaild--make-art (number suffix nov))
@@ -245,14 +245,12 @@ number and highest message number."
       (nnheader-report 'nnmaild "Group %s selected" group)
       t)
      (t
-      (nnheader-re-read-dir nnmaild-current-directory)
-      (let ((nmaild--data (nnmaild--scan-group-dir nnmaild-current-directory)))
-        (when info
-          (nnmaild--load-and-update-info group info server))
+      (let ((nnmaild--data (nnmaild--load-and-update-info group info server)))
 	    (nnheader-report 'nnmaild "Selected group %s with %s messages"
                          group (nnmaild--size))
-	    (nnheader-insert "211 %d %d %d %s\n" (nnmaild--size)
-                         (nnmaild--min) (nnmaild--max)))))))
+	    (nnheader-insert "211 %d %d %d %s\n"
+						 (nnmaild--size) (nnmaild--min) (nnmaild--max)
+						 group))))))
 
 (deffoo nnmaild-request-group-scan (group &optional server info)
   (let ((nnmaild--data (nnmaild--load-and-update-info group info server)))
@@ -311,7 +309,8 @@ number and highest message number."
 
 
 (defun nnmaild-request-list-1 (group-dir group server)
-  (let* ((data (nnmaild--scan-group-dir group-dir)))
+  (nnmaild-possibly-change-directory group server)
+  (let* ((data (nnmaild--scan-group-dir nnmaild-current-directory)))
     (with-current-buffer nntp-server-buffer
       (goto-char (point-max))
       (nnheader-report 'nnmaild
@@ -340,8 +339,7 @@ number and highest message number."
 (deffoo nnmaild-request-set-mark (group actions &optional server)
   (nnmaild-possibly-change-directory group server)
   (let* ((file-name-coding-system nnmail-pathname-coding-system)
-         (group-dir (nnmaild-group-pathname group nil server))
-         (nnmaild--data (nnmaild--scan-group-dir group-dir)))
+         (nnmaild--data (nnmaild--scan-group-dir nnmaild-current-directory)))
     (maphash (lambda (prefix art)
                (when (stringp prefix)
                  (let ((article (nnmaild--art-number art))
@@ -369,19 +367,22 @@ number and highest message number."
     (article group server accept-form &optional last move-is-internal)
   (nnmaild-possibly-change-directory group server)
   (let* ((file-name-coding-system nnmail-pathname-coding-system)
-         (group-dir (nnmaild-group-pathname group nil server))
-         (nnmaild--data (nnmaild--scan-group-dir group-dir))
+         (nnmaild--data (nnmaild--scan-group-dir nnmaild-current-directory))
          (nnmaild--move-file (nnmaild--data-article-to-file article)))
     (with-temp-buffer
       (when (file-writable-p nnmaild--move-file)
         (nnheader-insert-file-contents nnmaild--move-file)
-        (when (eval accept-form)
-          (push nnmaild--move-file nnmaild-files-to-delete)
+        (when-let ((group-article-pair (eval accept-form)))
+          ;; If the file was moved in nnmaild-request-accept-article
+          ;; nnmaild--move-file will be reset to nil
+          (when nnmaild--move-file
+            (push nnmaild--move-file nnmaild-files-to-delete))
           (nnmaild--data-delete-article article)
-          (when (null last)
+          (when last
             (nnmaild--delete-queued-files))
           (setf (nnmaild--data-mtime nnmaild--data)
-                (current-time)))))))
+                (current-time))
+          group-article-pair)))))
 
 (defun nnmaild--delete-queued-files ()
   (let ((file-name-coding-system nnmail-pathname-coding-system))
@@ -391,9 +392,10 @@ number and highest message number."
 (deffoo nnmaild-request-accept-article (group &optional server last)
   (nnmaild-possibly-change-directory group server)
   (let* ((coding-system-for-write nnheader-file-coding-system)
-         (nnmaild--data (nnmaild--scan-group-dir group))
+         (nnmaild--data (nnmaild--scan-group-dir nnmaild-current-directory))
+		 (extension (and nnmaild--move-file (file-name-extension nnmaild--move-file)))
+         (output-file (nnmaild--tmp-file-name extension))
          (cur-dir (nnmaild-group-pathname group "cur" server))
-         (output-file (nnmaild--tmp-file-name))
          (cur-file (expand-file-name output-file cur-dir))
          (tmp-dir (nnmaild-group-pathname group "tmp" server))
          (tmp-file (expand-file-name output-file tmp-dir)))
@@ -401,12 +403,24 @@ number and highest message number."
            (nnheader-report 'nnmaild "Destination file %s exists. Should never happen!"
                             cur-file)
            nil)
+		  ;; If we are moving the message from another nnmaild folder,
+		  ;; we try to use rename-file, preserving the extension and
+		  ;; marks of the original message. We could reuse the file name
+		  ;; but some Maildir synchronization software stores information
+		  ;; in the name (e.g. UUID), which could cause conflicts.
           ((and nnmaild--move-file
-                (condition-case nil (rename-file nnmaild--move-file cur-file nil)
-                  (error nil)))
+				(condition-case nil
+					  (progn
+						(rename-file nnmaild--move-file cur-file nil)
+						t)
+					(error
+					 (nnheader-report 'nnmaild "Unable to move %S to %S"
+									  nnmaild--move-file cur-file)
+					 nil)))
+           (nnheader-report 'nnmaild "Message file %S moved to %S"
+                            nnmaild--move-file cur-file)
            ;; File has been simply renamed. We do not need to delete it.
-           (setq nnmaild-files-to-delete
-                 (delete nnmaild--move-file nnmaild-files-to-delete))
+           (setq nnmaild--move-file nil)
            (cons group (nnmaild--data-insert-file cur-file)))
           ((file-exists-p tmp-file)
            (nnheader-report 'nnmaild "Temporary file %s exists. Should never happen!"
@@ -417,21 +431,23 @@ number and highest message number."
                (and (write-region (point-min) (point-max) tmp-file nil
                                   'no-message nil 'excl)
                     (rename-file tmp-file cur-file nil)
+                    (nnheader-report 'nnmaild "Stored message into file %S" cur-file)
                     (cons group (nnmaild--data-insert-file cur-file)))
              (error
               (delete-file tmp-file)
               nil))))))
 
-(defun nnmaild--tmp-file-name ()
+(defun nnmaild--tmp-file-name (&optional extension)
   "Return a hopefully unique and valid name for a message file."
   (let ((time (current-time)))
-    (format "%sR%x%sP%dQ%d%s2,"
+    (format "%sR%x%sP%dQ%d%s2,%s"
             (format-time-string "#%s" time) ;; A monotonously increasing number
             (random) ;; Not cryptographically random, but good enough
             (format-time-string "M%6N" time)
             (emacs-pid)
             (cl-incf nnmaild-delivery-count)
-            (nnmaild-flag-separator))))
+            (nnmaild-flag-separator)
+			(or extension ""))))
 
 (deffoo nnmaild-request-post (&optional server)
   (nnmail-do-request-post 'nnmaild-request-accept-article server))
@@ -721,7 +737,7 @@ by nnmaild-data-file within the group directory."
       (insert ")\n")))
   data)
 
-(defsubst nnmaild--flag-separator ()
+(defsubst nnmaild-flag-separator ()
   (substring nnmaild-flag-separators 0 1))
 
 (defsubst nnmaild--split-prefix-regex ()
@@ -733,6 +749,8 @@ by nnmaild-data-file within the group directory."
 with information gathered from the directory GROUP-DIR. This includes removing
 messages that have been deleted, updating the suffix of messages whose status
 has changed, and preemptively loading NOV structures, if absent."
+  ;; Load directory, if placed on a remote folder (e.g. tramp, ftp)
+  (nnheader-re-read-dir group-dir)
   (let* ((files (nnheader-directory-files (expand-file-name "cur" group-dir)
                                           t "^[^.].+$" t))
          (nnmaild--data
