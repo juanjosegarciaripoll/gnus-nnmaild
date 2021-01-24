@@ -321,7 +321,7 @@ number and highest message number."
 (deffoo nnmaild-request-set-mark (group actions &optional server)
   (let* ((file-name-coding-system nnmail-pathname-coding-system)
          (group-dir (nnmaild-group-pathname group server))
-         (nnmaild--data (nnmaild--scan-group-dir group-dir)))
+         (data (nnmaild--scan-group-dir group-dir)))
     (maphash (lambda (prefix art)
                (when (stringp prefix)
                  (let ((article (nnmaild--art-number art))
@@ -332,8 +332,8 @@ number and highest message number."
                            (marks (caddr triplet)))
                        (when (member article range)
                          (setq suffix (nnmaild--act-on-suffix suffix action marks)))))
-                   (nnmaild--commit-new-suffix prefix suffix art))))
-             (nnmaild--data-hash nnmaild--data))))
+                   (nnmaild--commit-new-suffix data prefix suffix art))))
+             (nnmaild--data-hash data))))
 
 (deffoo nnmaild-request-update-mark (group article mark)
   (let ((known-mark (cdr (assoc mark '((?R . (read))
@@ -551,10 +551,10 @@ See `nnmaildir-flag-mark-mapping'."
         suffix
       (nnmaild--marks-to-suffix new-marks))))
 
-(defun nnmaild--commit-new-suffix (prefix new-suffix art)
+(defun nnmaild--commit-new-suffix (data prefix new-suffix art)
   (let* ((suffix (nnmaild--art-suffix art)))
     (unless (string-equal suffix new-suffix)
-      (let* ((path (nnmaild--data-path nnmaild--data))
+      (let* ((path (nnmaild--data-path data))
              (old-file-name (expand-file-name (concat "cur/" prefix suffix) path))
              (new-file-name (expand-file-name (concat "cur/" prefix new-suffix) path)))
         (rename-file old-file-name new-file-name 'replace)
