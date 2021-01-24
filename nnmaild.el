@@ -368,7 +368,7 @@ number and highest message number."
           ;; nnmaild--move-file will be reset to nil
           (when nnmaild--move-file
             (push nnmaild--move-file nnmaild-files-to-delete))
-          (nnmaild--data-delete-article article)
+          (nnmaild--data-delete-article nnmaild--data article)
           (when last
             (nnmaild--delete-queued-files))
           (setf (nnmaild--data-mtime nnmaild--data)
@@ -773,6 +773,8 @@ has changed, and preemptively loading NOV structures, if absent."
     nnmaild--data))
 
 (defun nnmaild--data-insert-file (path &optional regex old-hash)
+  "Inserts a new message into nnmaild--data, or recovers the information from
+a preexisting hash. Returns the old article number, or a newly computed one."
   (let ((f (file-name-nondirectory path)))
     (when (string-match (or regex (nnmaild--split-prefix-regex)) f)
       (let* ((prefix (match-string 1 f))
@@ -785,7 +787,8 @@ has changed, and preemptively loading NOV structures, if absent."
           (setf article-number (nnmaild--allocate)
                 old-record (nnmaild--make-art article-number suffix nil)))
         (puthash prefix old-record (nnmaild--hash))
-        (puthash article-number prefix (nnmaild--hash))))))
+        (puthash article-number prefix (nnmaild--hash))
+        article-number))))
 
 (defun nnmaild--scan-group-dir (group-dir)
   "Return the nnmaild--data structure for the given group, either from the
@@ -830,8 +833,8 @@ or by recreating it from scratch."
     (expand-file-name (concat "cur/" prefix (nnmaild--art-suffix record))
                       (nnmaild--data-path data))))
 
-(defun nnmaild--data-delete-article (number)
-  (let* ((hash (nnmaild--hash))
+(defun nnmaild--data-delete-article (data number)
+  (let* ((hash (nnmaild--data-hash data))
          (prefix (gethash number hash nil)))
     (when prefix
       (remhash number hash)
