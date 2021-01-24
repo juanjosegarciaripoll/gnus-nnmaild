@@ -252,8 +252,7 @@ or a string with a mail ID."
 (deffoo nnmaild-request-group (group &optional server dont-check info)
   "Request GROUP from SERVER, outputting the number of messages, lowest message
 number and highest message number."
-  (let* ((file-name-coding-system nnmail-pathname-coding-system)
-         (group-dir (nnmaild-group-pathname group server nil 'ignore-error)))
+  (let* ((group-dir (nnmaild-group-pathname group server nil 'ignore-error)))
     (cond
      ((null group-dir)
       ;; nnheader-report has already been invoked from nnmaild-group-pathname
@@ -319,8 +318,12 @@ number and highest message number."
   nil)
 
 (deffoo nnmaild-request-set-mark (group actions &optional server)
-  (let* ((file-name-coding-system nnmail-pathname-coding-system)
-         (group-dir (nnmaild-group-pathname group server))
+  "Perform a set of mark actions onto the messages of this GROUP and SEVER.
+The actions are given by a list of triplets (ARTICLE-RANGE ACTION MARKS),
+where ARTICLE-RANGE is a list of article numbers, ACTION is one of ADD,
+DEL or SET, and MARKS is a list of marks to consider for this action.
+SERVER defaults to the backend's current server."
+  (let* ((group-dir (nnmaild-group-pathname group server))
          (data (nnmaild--scan-group-dir group-dir)))
     (maphash (lambda (prefix art)
                (when (stringp prefix)
@@ -347,6 +350,10 @@ number and highest message number."
 
 (deffoo nnmaild-request-move-article
     (article group server accept-form &optional last move-is-internal)
+  "Try to move the message denoted by the ARTICLE number from the GROUP and
+SERVER, to a destination that is implicit in the ACCEPT-FORM function. LAST
+is NIL when there will be more move operations later on, which means that
+we can wait to update the cache."
   (let* ((file-name-coding-system nnmail-pathname-coding-system)
          (group-dir (nnmaild-group-pathname group server))
          (data (nnmaild--scan-group-dir group-dir))
@@ -367,11 +374,22 @@ number and highest message number."
           group-article-pair)))))
 
 (defun nnmaild--delete-queued-files ()
+  "Erase all files that were pending for deleting, due to MOVE operations."
   (let ((file-name-coding-system nnmail-pathname-coding-system))
     (mapc 'nnmail-delete-file-function nnmaild-files-to-delete)
     (setq nnmaild-files-to-delete nil)))
 
 (deffoo nnmaild-request-accept-article (group &optional server last)
+  "This function accepts an article that is stored in the current buffer,
+storing it in a GROUP of the SERVER (defaults to current server). This
+version will perform a simple move if NNMAILD--MOVE-FILE is true and
+we can just rename the file. Otherwise it creates a new file using the
+buffer's content.
+
+The destination file name is created as per the Maildir informal spec from
+Wikipedia (See NNMAILD--TMP-FILE-NAME), even if the origin had a valid
+Maildir file name. This is done to avoid clobbering information that is used
+by some mail synchronization software."
   (let* ((coding-system-for-write nnheader-file-coding-system)
          (group-dir (nnmaild-group-pathname group server))
          (data (nnmaild--scan-group-dir group-dir))
@@ -468,15 +486,19 @@ absolute path that is removed from GROUP-PATH to create GROUP-NAME."
                             output))))
     (nreverse output)))
 
-(defun nnmaild--valid-maildir-p (dir)
-  (and (file-directory-p dir)
+(defun nnmaild--valid-maildir-p (path)
+  "Return true if PATH is a valid Maildir directory, with all the
+expected folders."
+  (and (file-directory-p path)
        (cl-every (lambda (subdir)
-                   (let ((dir (expand-file-name subdir dir)))
+                   (let ((dir (expand-file-name subdir path)))
                      (and (file-exists-p dir)
                           (file-directory-p dir))))
                  '("cur" "new" "tmp"))))
 
 (defun nnmaild--make-group-name (directory root)
+  "Creates a group name from a DIRECTORY file name, by
+subtracting ROOT, and creating a string with valid characters."
   (string-trim (file-relative-name directory root)
                "[/\\\\]" "[/\\\\]"))
 
@@ -542,6 +564,7 @@ See `nnmaildir-flag-mark-mapping'."
   (let* ((suffix (nnmaild--art-suffix art)))
     (unless (string-equal suffix new-suffix)
       (let* ((path (nnmaild--data-path data))
+             (file-name-coding-system nnmail-pathname-coding-system)
              (old-file-name (expand-file-name (concat "cur/" prefix suffix) path))
              (new-file-name (expand-file-name (concat "cur/" prefix new-suffix) path)))
         (rename-file old-file-name new-file-name 'replace)
@@ -591,6 +614,8 @@ See `nnmaildir-flag-mark-mapping'."
   nil)
 
 (defun nnmaild--load-article-nov (path number)
+  "Load the NOV text from the given file, assigning it a message
+NUMBER."
   (let ((nov-buffer (get-buffer-create " *nov*"))
         nov chars headers)
     (with-current-buffer nov-buffer
@@ -701,7 +726,8 @@ nnmaild-cache-strategy allows it."
 by nnmaild-data-file within the group directory. If the file does
 not exist, or the data is corrupt, return false. Otherwise,
 return an nnmaild--data structure."
-  (let* ((nnmaild--data nil)
+  (let* ((file-name-coding-system nnmail-pathname-coding-system)
+         (nnmaild--data nil)
          (data-file (expand-file-name nnmaild-data-file group-dir))
          (attr (file-attributes data-file)))
     (if (null attr)
