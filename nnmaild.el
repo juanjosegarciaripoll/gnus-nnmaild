@@ -129,17 +129,10 @@ name.")
 (defsubst nnmaild--hash ()
   (nnmaild--data-hash nnmaild--data))
 
-(defsubst nnmaild--size ()
-  (nnmaild--data-size nnmaild--data))
-
 (cl-defstruct (nnmaild--art
                (:constructor nnmaild--make-art (number suffix nov))
                (:type list))
   number suffix nov)
-
-(defsubst nnmaild--prefix-to-art (prefix)
-  (gethash prefix (nnmaild--hash) nil))
-
 
 ;;; Interface functions.
 
@@ -278,20 +271,23 @@ number and highest message number."
       (nnheader-report 'nnmaild "Group %s selected" group)
       t)
      (t
-      (let ((nnmaild--data (nnmaild--load-and-update-info group info server)))
+      (let ((data (nnmaild--load-and-update-info group info server)))
 	    (nnheader-report 'nnmaild "Selected group %s with %s messages"
-                         group (nnmaild--size))
+                         group (nnmaild--data-size data))
 	    (nnheader-insert "211 %d %d %d %s\n"
-						 (nnmaild--size) (nnmaild--min) (nnmaild--max)
+						 (nnmaild--data-size data)
+                         (nnmaild--data-min data)
+                         (nnmaild--data-max data)
 						 group))))))
 
 (deffoo nnmaild-request-group-scan (group &optional server info)
-  (let ((nnmaild--data (nnmaild--load-and-update-info group info server)))
+  (let ((data (nnmaild--load-and-update-info group info server)))
     (with-current-buffer nntp-server-buffer
 	  (erase-buffer)
 	  (insert
 	   (format
-	    "211 %d %d %d %S\n" (nnmaild--size) (nnmaild--min) (nnmaild--max)
+	    "211 %d %d %d %S\n" (nnmaild--data-size data)
+        (nnmaild--data-min data) (nnmaild--data-max data)
 	    group))
 	  t)))
 
@@ -521,9 +517,6 @@ which groups are scanned."
                  (car group-dir-pair) ;; group name
                  server)))))
 
-(defsubst nnmaild--article-to-prefix (article)
-  (gethash article (nnmaild--hash) nil))
-
 (defconst nnmaild-flag-mark-mapping
   '((?F . tick)
     (?P . forward)
@@ -640,17 +633,6 @@ See `nnmaildir-flag-mark-mapping'."
       (when headers
         (nnheader-insert-nov headers)
         (buffer-string)))))
-
-(defun nnmaild--update-article-data (path prefix suffix old-record)
-  (let (article-number)
-    (if old-record
-        (setf (nnmaild--art-suffix old-record) suffix
-              article-number (nnmaild--art-number old-record))
-      (setf article-number (nnmaild--allocate)
-            old-record (nnmaild--make-art article-number suffix nil)))
-    (puthash prefix old-record (nnmaild--hash))
-    (puthash article-number prefix (nnmaild--hash))
-    article-number))
 
 (defun nnmaild--data-expired-p (data)
   "Return true if the cache has expired and must be rebuilt. See
@@ -795,8 +777,15 @@ has changed, and preemptively loading NOV structures, if absent."
     (when (string-match (or regex (nnmaild--split-prefix-regex)) f)
       (let* ((prefix (match-string 1 f))
              (suffix (match-string 2 f))
-             (old-record (and old-hash (gethash prefix old-hash nil))))
-        (nnmaild--update-article-data path prefix suffix old-record)))))
+             (old-record (and old-hash (gethash prefix old-hash nil)))
+             article-number)
+        (if old-record
+            (setf (nnmaild--art-suffix old-record) suffix
+                  article-number (nnmaild--art-number old-record))
+          (setf article-number (nnmaild--allocate)
+                old-record (nnmaild--make-art article-number suffix nil)))
+        (puthash prefix old-record (nnmaild--hash))
+        (puthash article-number prefix (nnmaild--hash))))))
 
 (defun nnmaild--scan-group-dir (group-dir)
   "Return the nnmaild--data structure for the given group, either from the
@@ -809,9 +798,6 @@ or by recreating it from scratch."
         (nnmaild--data-to-cache
          (nnmaild--data-update nnmaild--data group-dir))
       nnmaild--data)))
-
-(defun nnmaild--article-prefix (article)
-  (gethash article (nnmaild--hash)))
 
 (defun nnmaild--article-nov (article)
   (when-let ((prefix (gethash article (nnmaild--hash)))
