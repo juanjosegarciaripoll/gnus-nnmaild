@@ -32,6 +32,11 @@
 structures, where we cache information about the messages. Only active
 when nnmaild-cache-strategy is not NIL.")
 
+(defvoo nnmaild-recurse t
+  "If T, look for Maildir directories recursively into all subfolders of
+nnmaild-directory, not just on the folders immediately inside it. NIL means
+that only the toplevel folders are treated as groups.")
+
 (defvoo nnmaild-cache-strategy 'memory+file
   "Symbol determining how we cache information about the messages in Maildir.
 
@@ -74,11 +79,11 @@ the Maildir folder directory, or it can be an absolute file
 name.")
 
 
-(defconst nnmaild-version "nnmaild 0.3"
+(defconst nnmaild-version "nnmaild 0.4"
   "nnmaild version.")
 
-(defvoo nnmaild-current-directory nil)
-(defvoo nnmaild-current-group nil)
+(defvoo nnmaild-server-alist nil
+  "Association list of server names to groups")
 (defvoo nnmaild--move-file nil)
 (defvoo nnmaild-files-to-delete nil)
 (defvoo nnmaild-status-string "")
@@ -140,18 +145,36 @@ name.")
 
 (nnoo-define-basics nnmaild)
 
-(defun nnmaild-group-pathname (group &optional file server)
+(defun nnmaild-current-server ()
+  (nnoo-current-server 'nnmaild))
+
+(defun nnmaild-group-pathname (group &optional server file ignore-error)
   "Return an absolute file name of FILE for GROUP on SERVER."
-  (nnmail-group-pathname group nnmaild-directory file))
+  (let* ((server (or server (nnmaild-current-server)))
+         (record (assoc server nnmaild-server-alist))
+         (reporter (if ignore-error 'nnheader-report 'nnmaild--report-error)))
+    (cond ((null record)
+           (funcall reporter 'nnmaild "Server %s has not yet been opened" server)
+           nil)
+          ((null (setq record (assoc group (cdr record))))
+           (funcall reporter 'nnmaild "Group %s does not exist in server %s" group server)
+           nil)
+          (file
+           (expand-file-name file (cdr record)))
+          (t
+           (cdr record)))))
+
+(defun nnmaild--report-error (backed &rest args)
+  (apply 'error args))
 
 (deffoo nnmaild-retrieve-headers (sequence &optional group server fetch-old)
   "Return a list of headers in NOV format for the given group"
-  (when (nnmaild-possibly-change-directory group server)
+  (let ((group-dir (nnmaild-group-pathname group server)))
     (with-current-buffer nntp-server-buffer
       (erase-buffer)
 	  (if (stringp (car sequence))
 	      'headers
-        (let* ((nnmaild--data (nnmaild--scan-group-dir nnmaild-current-directory))
+        (let* ((nnmaild--data (nnmaild--scan-group-dir group-dir))
                (min (nnmaild--min))
                (max (nnmaild--max)))
 	      (with-current-buffer nntp-server-buffer
@@ -164,6 +187,8 @@ name.")
 
 (deffoo nnmaild-open-server (server &optional defs)
   "Open the SERVER and correct definitions."
+  ;; This registers the server with the current backend and sets
+  ;; is as the (nnoo-current-server)
   (nnoo-change-server 'nnmaild server defs)
   (when (not (file-exists-p nnmaild-directory))
     (ignore-errors (make-directory nnmaild-directory t)))
@@ -175,43 +200,54 @@ name.")
     (nnmaild-close-server)
     (nnheader-report 'nnmaild "Not a directory: %s" nnmaild-directory))
    (t
+    (push (cons server (nnmaild--create-list-of-groups nnmaild-directory
+                                                       nnmaild-recurse))
+          nnmaild-server-alist)
     (nnheader-report 'nnmaild "Opened server %s using directory %s"
 		             server nnmaild-directory)
     t)))
 
 (deffoo nnmaild-close-server (&optional server defs)
   (nnmaild--delete-queued-files)
-  (and server
-       (nnmaild-possibly-change-directory nil server)
-       (nnmaild--clear-cache (nnmaild-group-pathname "" nil server))))
+  (let ((server (or server (nnmaild-current-server))))
+    (nnmaild--mapc-groups (lambda (group-dir group server)
+                            (nnmaild--clear-cache group-dir))
+                          server)
+    (setq nnmaild-server-alist
+          (assoc-delete-all server nnmaild-server-alist))))
 
 (deffoo nnmaild-request-close ()
-  (nnmaild--delete-queued-files)
-  (nnmaild--clear-cache nil)
+  (mapc (lambda (pair) (nnmaild-close-server (car pair)))
+        nnmaild-server-alist)
   t)
 
 (deffoo nnmaild-request-regenerate (server)
   "Regenerate server information."
+  (let ((record server))
+    (rplacd record (nnmaild--create-list-of-groups nnmaild-directory
+                                                   nnmaild-recurse)))
   t)
 
 (deffoo nnmaild-request-article (id &optional group server buffer)
   "Request the article denoted by ID from GROUP. ID can be an article number
 or a string with a mail ID."
-  (nnmaild-possibly-change-directory group server)
   (let* ((nntp-server-buffer (or buffer nntp-server-buffer))
 	     (file-name-coding-system nnmail-pathname-coding-system)
-         (nnmaild--data (nnmaild--scan-group-dir nnmaild-current-directory))
+         (server (or server (nnmaild-current-server)))
+         (group-dir (nnmaild-group-pathname group server))
+         (nnmaild--data (nnmaild--scan-group-dir group-dir))
          (article (if (numberp id)
                       id
 	                (or (nnmaild--data-find-id id)
                         (catch 'return
-                          (dolist (pair nnmaild-group-alist nil)
-                            (let* ((other-group (car pair))
-                                   (group-path (nnmaild-group-pathname other-group nil server)))
-                              (setq nnmaild--data (nnmaild--scan-group-dir group-path))
-                              (when-let ((article (nnmaild--data-find-id id)))
-                                (setq group other-group)
-                                (throw 'return article))))))))
+                          (nnmaild--mapc-groups
+                           (lambda (group-dir other-group server)
+                             (setq nnmaild--data (nnmaild--scan-group-dir group-dir))
+                             (when-let ((article (nnmaild--data-find-id id)))
+                               (setq group other-group)
+                               (throw 'return article)))
+                           server)
+                          nil))))
          (path (and article (nnmaild--data-article-to-file article))))
     (cond
      ((not path)
@@ -232,15 +268,12 @@ or a string with a mail ID."
 (deffoo nnmaild-request-group (group &optional server dont-check info)
   "Request GROUP from SERVER, outputting the number of messages, lowest message
 number and highest message number."
-  (let ((file-name-coding-system nnmail-pathname-coding-system))
+  (let* ((file-name-coding-system nnmail-pathname-coding-system)
+         (group-dir (nnmaild-group-pathname group server nil 'ignore-error)))
     (cond
-     ((not (nnmaild-possibly-change-directory group server))
-      (nnheader-report 'nnmaild "Invalid group (no such directory)"))
-     ((not (file-exists-p nnmaild-current-directory))
-      (nnheader-report 'nnmaild "Directory %s does not exist"
-		               nnmaild-current-directory))
-     ((not (file-directory-p nnmaild-current-directory))
-      (nnheader-report 'nnmaild "%s is not a directory" nnmaild-current-directory))
+     ((null group-dir)
+      ;; nnheader-report has already been invoked from nnmaild-group-pathname
+      nil)
      (dont-check
       (nnheader-report 'nnmaild "Group %s selected" group)
       t)
@@ -263,16 +296,7 @@ number and highest message number."
 	  t)))
 
 (deffoo nnmaild-request-scan (&optional group server)
-  (nnmaild-possibly-change-directory group server)
-  (cond
-   (group
-    (nnmail-get-new-mail 'nnmaild 'nnmaild-save-incremental-nov nnmaild-directory group))
-   ((nnmail-get-new-mail-per-group)
-    (nnmaild-request-list)
-    (dolist (entry nnmaild-group-alist)
-      (nnmaild-request-scan (car entry) server)))
-   (t
-    (nnmail-get-new-mail 'nnmaild 'nnmaild-save-incremental-nov nnmaild-directory nil))))
+  t)
 
 (deffoo nnmaild-request-update-info (group info &optional server)
   (nnmaild--load-and-update-info group info server)
@@ -283,52 +307,23 @@ number and highest message number."
 
 (deffoo nnmaild-request-create-group (group &optional server args)
   "Create an empty GROUP in SERVER."
-  (nnmaild-possibly-change-directory nil server)
-  (let ((path (nnmaild-group-pathname group nil server)))
-    (unless (file-exists-p path)
-      (dolist (subdir '("cur" "new" "tmp"))
-        (gnus-make-directory (expand-file-name subdir path)))))
+  ;;; FIXME! We can implement this!
   nil)
 
-(deffoo nnmaild-request-list (&optional server dir)
+(deffoo nnmaild-request-list (&optional server)
   (nnheader-insert "")
   (save-excursion
-    (nnmaild--map-group-dirs 'nnmaild-request-list-1 server dir)
-    (setq nnmaild-group-alist (nnmail-get-active))
+    (nnmaild--mapc-groups 'nnmaild-request-list-1 server)
     t))
 
-(defun nnmaild--map-group-dirs (fn server dir)
-  (nnmaild-possibly-change-directory nil server)
-  (let ((file-name-coding-system nnmail-pathname-coding-system)
-        (nnmaild-toplev
-	     (file-truename (or dir (file-name-as-directory nnmaild-directory)))))
-    (dolist (group-dir (cl-remove-if-not 'nnmaild--valid-maildir-p
-                                         (nnheader-directory-files (expand-file-name nnmaild-toplev)
-                                                                   t nil t)))
-      (funcall fn group-dir (file-name-nondirectory group-dir) server))))
-
-
-(defun nnmaild-request-list-1 (group-dir group server)
-  (nnmaild-possibly-change-directory group server)
-  (let* ((data (nnmaild--scan-group-dir nnmaild-current-directory)))
+(defun nnmaild-request-list-1 (group-dir group-name server)
+  (let* ((data (nnmaild--scan-group-dir group-dir)))
     (with-current-buffer nntp-server-buffer
       (goto-char (point-max))
-      (nnheader-report 'nnmaild
-                       "%s %.0f %.0f y\n"
-                       (file-name-nondirectory group-dir)
-                       (nnmaild--data-max data)
-                       (nnmaild--data-min data))
       (insert (format "%s %.0f %.0f y\n"
-                      (file-name-nondirectory group-dir)
+                      group-name
                       (nnmaild--data-max data)
                       (nnmaild--data-min data))))))
-
-(defun nnmaild--valid-maildir-p (dir)
-  (cl-every (lambda (dir)
-              (and (file-exists-p dir)
-                   (file-directory-p dir)))
-            (cons dir (mapcar (lambda (x) (expand-file-name x dir))
-                              '("cur" "new" "tmp")))))
 
 (deffoo nnmaild-request-newgroups (date &optional server)
   (nnmaild-request-list server))
@@ -337,9 +332,9 @@ number and highest message number."
   nil)
 
 (deffoo nnmaild-request-set-mark (group actions &optional server)
-  (nnmaild-possibly-change-directory group server)
   (let* ((file-name-coding-system nnmail-pathname-coding-system)
-         (nnmaild--data (nnmaild--scan-group-dir nnmaild-current-directory)))
+         (group-dir (nnmaild-group-pathname group server))
+         (nnmaild--data (nnmaild--scan-group-dir group-dir)))
     (maphash (lambda (prefix art)
                (when (stringp prefix)
                  (let ((article (nnmaild--art-number art))
@@ -365,9 +360,9 @@ number and highest message number."
 
 (deffoo nnmaild-request-move-article
     (article group server accept-form &optional last move-is-internal)
-  (nnmaild-possibly-change-directory group server)
   (let* ((file-name-coding-system nnmail-pathname-coding-system)
-         (nnmaild--data (nnmaild--scan-group-dir nnmaild-current-directory))
+         (group-dir (nnmaild-group-pathname group server))
+         (nnmaild--data (nnmaild--scan-group-dir group-dir))
          (nnmaild--move-file (nnmaild--data-article-to-file article)))
     (with-temp-buffer
       (when (file-writable-p nnmaild--move-file)
@@ -390,14 +385,14 @@ number and highest message number."
     (setq nnmaild-files-to-delete nil)))
 
 (deffoo nnmaild-request-accept-article (group &optional server last)
-  (nnmaild-possibly-change-directory group server)
   (let* ((coding-system-for-write nnheader-file-coding-system)
-         (nnmaild--data (nnmaild--scan-group-dir nnmaild-current-directory))
-		 (extension (and nnmaild--move-file (file-name-extension nnmaild--move-file)))
+         (group-dir (nnmaild-group-pathname group server))
+         (nnmaild--data (nnmaild--scan-group-dir group-dir))
+         (extension (and nnmaild--move-file (file-name-extension nnmaild--move-file)))
          (output-file (nnmaild--tmp-file-name extension))
-         (cur-dir (nnmaild-group-pathname group "cur" server))
+         (cur-dir (expand-file-name "cur" group-dir))
          (cur-file (expand-file-name output-file cur-dir))
-         (tmp-dir (nnmaild-group-pathname group "tmp" server))
+         (tmp-dir (expand-file-name "new" group-dir))
          (tmp-file (expand-file-name output-file tmp-dir)))
     (cond ((file-exists-p cur-file)
            (nnheader-report 'nnmaild "Destination file %s exists. Should never happen!"
@@ -450,7 +445,7 @@ number and highest message number."
 			(or extension ""))))
 
 (deffoo nnmaild-request-post (&optional server)
-  (nnmail-do-request-post 'nnmaild-request-accept-article server))
+  nil)
 
 (deffoo nnmaild-request-replace-article (article group buffer)
   nil)
@@ -459,12 +454,12 @@ number and highest message number."
   nil)
 
 (deffoo nnmaild-request-rename-group (group new-name &optional server)
-  (nnmaild-possibly-change-directory group server)
   nil)
 
 (deffoo nnmaild-set-status (article name value &optional group server)
-  (nnmaild-possibly-change-directory group server)
-  (let ((file (nnmaild--data-article-to-file article)))
+  (let* ((group-dir (nnmaild-group-pathname group server))
+         (nnmaild--data (nnmaild--scan-group-dir group-dir))
+         (file (nnmaild--data-article-to-file article)))
     (cond
      ((not (file-exists-p file))
       (nnheader-report 'nnmaild "File %s does not exist" file))
@@ -477,18 +472,54 @@ number and highest message number."
 
 ;;; Internal functions.
 
-(defun nnmaild-possibly-change-directory (group &optional server)
-  (when (and server
-	         (not (nnmaild-server-opened server)))
-    (nnmaild-open-server server))
-  (if (not group)
-      t
-    (let ((pathname (nnmaild-group-pathname group nil server))
-	      (file-name-coding-system nnmail-pathname-coding-system))
-      (when (not (equal pathname nnmaild-current-directory))
-	    (setq nnmaild-current-directory pathname
-	          nnmaild-current-group group))
-      (file-exists-p nnmaild-current-directory))))
+(defun nnmaild--create-list-of-groups (directory recurse &optional root)
+  "Return an alist of (GROUP-NAME . GROUP-PATH) for all valid
+Maildir directories under DIRECTORY. If RECURSE is NIL, only the
+first level of folders is scanned; otherwise, all valid
+directories are searched for a Maildir structure. ROOT is an
+absolute path that is removed from GROUP-PATH to create GROUP-NAME."
+  (let ((file-name-coding-system nnmail-pathname-coding-system)
+        (root (or root directory))
+        output)
+	(dolist (group-dir (cl-remove-if-not 'nnmaild--valid-maildir-p
+                                         (nnheader-directory-files
+                                          (expand-file-name directory)
+                                          t "^[^.].*" t)))
+      (nnheader-report 'nnmaild "Registering group dir %s" group-dir)
+	  (push (cons (nnmaild--make-group-name group-dir root)
+                  group-dir)
+			output)
+	  (when recurse
+	    (setq output (nconc (nnmaild--create-list-of-groups group-dir recurse root)
+                            output))))
+    (nreverse output)))
+
+(defun nnmaild--valid-maildir-p (dir)
+  (and (file-directory-p dir)
+       (cl-every (lambda (subdir)
+                   (let ((dir (expand-file-name subdir dir)))
+                     (and (file-exists-p dir)
+                          (file-directory-p dir))))
+                 '("cur" "new" "tmp"))))
+
+(defun nnmaild--make-group-name (directory root)
+  (string-trim (file-relative-name directory root)
+               "[/\\\\]" "[/\\\\]"))
+
+(defun nnmaild--mapc-groups (fn server)
+  "Call FN once for each group in SERVER. The function should
+take three arguments: the absolute path to the group's Maildir
+folder, the group name and the server name. The output of the
+function is discarded. There is no guarantee over the order in
+which groups are scanned."
+  (let ((file-name-coding-system nnmail-pathname-coding-system)
+        (record (assoc server nnmaild-server-alist)))
+    (when record
+      (dolist (group-dir-pair (cdr record) t)
+        (funcall fn
+                 (cdr group-dir-pair) ;; group directory
+                 (car group-dir-pair) ;; group name
+                 server)))))
 
 (defsubst nnmaild--article-to-prefix (article)
   (gethash article (nnmaild--hash) nil))
@@ -532,7 +563,6 @@ See `nnmaildir-flag-mark-mapping'."
                       (del (cl-set-difference old-marks marks))
                       (add (cl-union old-marks marks))
                       (set marks))))
-    (print new-marks)
     (if (equal old-marks new-marks)
         suffix
       (nnmaild--marks-to-suffix new-marks))))
@@ -572,9 +602,7 @@ See `nnmaildir-flag-mark-mapping'."
             `((reply ,@(gnus-compress-sequence (sort replied '<)))))))))
 
 (defun nnmaild--load-and-update-info (group info server)
-  (unless server
-    (error "nnmaild-request-update-info got null server"))
-  (let* ((group-dir (nnmaild-group-pathname group nil server))
+  (let* ((group-dir (nnmaild-group-pathname group server))
          (nnmaild--data (nnmaild--scan-group-dir group-dir)))
     (when info
       (let ((marks (nnmaild--data-collect-marks nnmaild--data)))
@@ -619,8 +647,7 @@ See `nnmaildir-flag-mark-mapping'."
         (setf (nnmaild--art-suffix old-record) suffix
               article-number (nnmaild--art-number old-record))
       (setf article-number (nnmaild--allocate)
-            old-record (nnmaild--make-art article-number suffix
-                                          (nnmaild--load-article-nov path (nnmaild--max)))))
+            old-record (nnmaild--make-art article-number suffix nil)))
     (puthash prefix old-record (nnmaild--hash))
     (puthash article-number prefix (nnmaild--hash))
     article-number))
@@ -787,9 +814,15 @@ or by recreating it from scratch."
   (gethash article (nnmaild--hash)))
 
 (defun nnmaild--article-nov (article)
-  (let ((prefix (gethash article (nnmaild--hash))))
-    (when prefix
-      (nnmaild--art-nov (gethash prefix (nnmaild--hash))))))
+  (when-let ((prefix (gethash article (nnmaild--hash)))
+             (art (gethash prefix (nnmaild--hash))))
+    (or (nnmaild--art-nov art)
+        (setf (nnmaild--art-nov art)
+              (nnmaild--load-article-nov
+               (expand-file-name (concat prefix (nnmaild--art-suffix art))
+                                 (expand-file-name "cur"
+                                                   (nnmaild--data-path nnmaild--data)))
+               article)))))
 
 (defun nnmaild--data-find-id (id)
   "Search nnmaild--hash for the message id and return the article number"
