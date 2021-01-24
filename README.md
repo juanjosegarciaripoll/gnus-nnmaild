@@ -1,20 +1,20 @@
 # New Maildir backend for Gnus
 
-Version: 0.3
+Version: 0.4
 
 ## Motivation
 
-I use Maildir spools synchronized to external mail servers with isync or offlineimap. Normally, I rely on mu4e for reading and exploring those folders, but I would like to have a pure Emacs solution. However, the `nnmaildir` backend is *veeery* slow on Windows, relying on one additional file per message to store information, using links, extra flags, etc. This contrasts with other backends, such as `nnml`, that are snappier and use a single cache file.
+I store my email in Maildir folders that are  synchronized to external IMAP servers using isync or offlineimap. Normally, I rely on mu4e for reading and exploring those folders, but I would like to have a pure Emacs solution. However, the `nnmaildir` backend is *veeery* slow on Windows, relying on one additional file per message to store information, using links, extra flags, etc. This contrasts with other backends, such as `nnml`, that are snappier and use a single cache file.
 
 ## How it works
 
-The backend started a rewrite of `nnml` to handle the Maildir format. I has ended up being a completely different backend, with a new caching system based on hash tables, where the flags are provided by the backend, not by Gnus. This means it only supports the `read`, `replied-to`, `forwarded` and `tick` flags, but it does it very efficiently, using Maildir's conventions.
+The backend started as a rewrite of `nnml` to handle the Maildir format. After a lot of reconsideration and tests, it has become a completely different backend, with a new caching system based on hash tables, where the flags are provided by the backend, not by Gnus. This means it only supports the `read`, `replied-to`, `forwarded` and `tick` flags, but it does it very efficiently, using Maildir's conventions.
 
-When it faces a directory, the backend tries to find a `.nnmaild-data.el` file. If it exists, it loads the files as the default source of information about the messages, mapping between file names and messages numbers, and cached headers (Gnus NOV format). If that information does not exist, or Gnus request a more thorough check, the backend will recreate the cache, comparing a list of existing message files with the previous data, loading the headers from messages that were not scanned before, etc.
+When `nnmaild` faces a directory, is searches a file with the name `.nnmaild-data.el`. If it exists, it used to restore some basic information about all messages in the folde, the association between file names and Gnus messages numbers, or cached headers (Gnus NOV format). When the file is missing or it has become obsolete, the backend recreates the cache, comparing a list of existing message files with the previous data, loading the headers from messages that were not scanned before, etc.
 
 ## Configuration
 
-Typically, you would set add your backend to `gnus-secondary-select-methods`, as in
+Typically, you would add this backend to `gnus-secondary-select-methods`, as in the following example:
 ```
 (setq gnus-secondary-select-methods
 	  '((nnmaild "maildir"
@@ -23,6 +23,7 @@ Typically, you would set add your backend to `gnus-secondary-select-methods`, as
 		 (nnmaild-cache-strategy full)
 		 (nnmaild-cache-expiration-strategy 'directory-mtime))))
 ```
+Here, we assume that `~/Maildir` is a directory that contains other folders, each of them storing messages in the Maildir format. We also select the Maildir flag separators that are commonly used in Windows and tell `nnmaild` to watch the folders' modification time to detect when the cache has become obsolete.
 
 The following variables apply to the backend:
 
@@ -45,7 +46,11 @@ The following variables apply to the backend:
 ## Status
 
 This **has not** been implemented:
-- Creating new folders (AKA groups)
+- nnmaild-request-expire-articles
+
+These are **unlikely to be implemented**. For efficiency and consistency, the backend asssumes that the content of messages is immutable, and that groups exist for as long a server is open:
+- Creating, deleting or renaming folders (AKA groups)
+- Article edition
 
 ## Caveats
 
