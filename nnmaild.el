@@ -158,14 +158,14 @@ name.")
       (erase-buffer)
 	  (if (stringp (car sequence))
 	      'headers
-        (let* ((nnmaild--data (nnmaild--scan-group-dir group-dir))
-               (min (nnmaild--data-min nnmaild--data))
-               (max (nnmaild--data-max nnmaild--data)))
+        (let* ((data (nnmaild--scan-group-dir group-dir))
+               (min (nnmaild--data-min data))
+               (max (nnmaild--data-max data)))
 	      (with-current-buffer nntp-server-buffer
             (erase-buffer)
 	        (dolist (article sequence)
               (when (and (>= article min) (<= article max))
-                (when-let ((nov (nnmaild--data-article-nov nnmaild--data article)))
+                (when-let ((nov (nnmaild--data-article-nov data article)))
                   (insert nov)))))
           'nov)))))
 
@@ -219,20 +219,20 @@ or a string with a mail ID."
 	     (file-name-coding-system nnmail-pathname-coding-system)
          (server (or server (nnmaild-current-server)))
          (group-dir (nnmaild-group-pathname group server))
-         (nnmaild--data (nnmaild--scan-group-dir group-dir))
+         (data (nnmaild--scan-group-dir group-dir))
          (article (if (numberp id)
                       id
-	                (or (nnmaild--data-find-id nnmaild--data id)
+	                (or (nnmaild--data-find-id data id)
                         (catch 'return
                           (nnmaild--mapc-groups
                            (lambda (group-dir other-group server)
-                             (setq nnmaild--data (nnmaild--scan-group-dir group-dir))
-                             (when-let ((article (nnmaild--data-find-id nnmaild--data id)))
+                             (setq data (nnmaild--scan-group-dir group-dir))
+                             (when-let ((article (nnmaild--data-find-id data id)))
                                (setq group other-group)
                                (throw 'return article)))
                            server)
                           nil))))
-         (path (and article (nnmaild--data-article-to-file nnmaild--data article))))
+         (path (and article (nnmaild--data-article-to-file data article))))
     (cond
      ((not path)
       (nnheader-report 'nnmaild "No such article: %s" id))
@@ -349,8 +349,8 @@ number and highest message number."
     (article group server accept-form &optional last move-is-internal)
   (let* ((file-name-coding-system nnmail-pathname-coding-system)
          (group-dir (nnmaild-group-pathname group server))
-         (nnmaild--data (nnmaild--scan-group-dir group-dir))
-         (nnmaild--move-file (nnmaild--data-article-to-file nnmaild--data article)))
+         (data (nnmaild--scan-group-dir group-dir))
+         (nnmaild--move-file (nnmaild--data-article-to-file data article)))
     (with-temp-buffer
       (when (file-writable-p nnmaild--move-file)
         (nnheader-insert-file-contents nnmaild--move-file)
@@ -359,10 +359,10 @@ number and highest message number."
           ;; nnmaild--move-file will be reset to nil
           (when nnmaild--move-file
             (push nnmaild--move-file nnmaild-files-to-delete))
-          (nnmaild--data-delete-article nnmaild--data article)
+          (nnmaild--data-delete-article data article)
           (when last
             (nnmaild--delete-queued-files))
-          (setf (nnmaild--data-mtime nnmaild--data)
+          (setf (nnmaild--data-mtime data)
                 (current-time))
           group-article-pair)))))
 
@@ -401,7 +401,7 @@ number and highest message number."
 					 nil)))
            (nnheader-report 'nnmaild "Message file %S moved to %S"
                             nnmaild--move-file cur-file)
-           ;; File has been simply renamed. We do not need to delete it.
+           ;; File has been simply renamed. We do not need to delete it.
            (setq nnmaild--move-file nil)
            (cons group (nnmaild--data-insert-file nnmaild--data cur-file)))
           ((file-exists-p tmp-file)
