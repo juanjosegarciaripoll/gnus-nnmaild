@@ -120,12 +120,6 @@ name.")
 (defsubst nnmaild--data-size (data)
   (/ (hash-table-count (nnmaild--data-hash data)) 2))
 
-(defsubst nnmaild--min ()
-  (nnmaild--data-min nnmaild--data))
-
-(defsubst nnmaild--max ()
-  (nnmaild--data-max nnmaild--data))
-
 (cl-defstruct (nnmaild--art
                (:constructor nnmaild--make-art (number suffix nov))
                (:type list))
@@ -165,8 +159,8 @@ name.")
 	  (if (stringp (car sequence))
 	      'headers
         (let* ((nnmaild--data (nnmaild--scan-group-dir group-dir))
-               (min (nnmaild--min))
-               (max (nnmaild--max)))
+               (min (nnmaild--data-min nnmaild--data))
+               (max (nnmaild--data-max nnmaild--data)))
 	      (with-current-buffer nntp-server-buffer
             (erase-buffer)
 	        (dolist (article sequence)
