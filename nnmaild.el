@@ -231,12 +231,12 @@ or a string with a mail ID."
          (nnmaild--data (nnmaild--scan-group-dir group-dir))
          (article (if (numberp id)
                       id
-	                (or (nnmaild--data-find-id id)
+	                (or (nnmaild--data-find-id nnmaild--data id)
                         (catch 'return
                           (nnmaild--mapc-groups
                            (lambda (group-dir other-group server)
                              (setq nnmaild--data (nnmaild--scan-group-dir group-dir))
-                             (when-let ((article (nnmaild--data-find-id id)))
+                             (when-let ((article (nnmaild--data-find-id nnmaild--data id)))
                                (setq group other-group)
                                (throw 'return article)))
                            server)
@@ -811,7 +811,7 @@ or by recreating it from scratch."
                                                    (nnmaild--data-path data)))
                article)))))
 
-(defun nnmaild--data-find-id (id)
+(defun nnmaild--data-find-id (data id)
   "Search nnmaild--hash for the message id and return the article number"
   (catch 'return
     (let ((regex (regexp-quote (concat "\t" id "\t"))))
@@ -820,7 +820,7 @@ or by recreating it from scratch."
                    (let ((nov (nnmaild--art-nov art)))
                      (when (string-match regex nov)
                        (throw 'return (nnmaild--art-number art))))))
-               (nnmaild--hash))
+               (nnmaild--data-hash data))
       nil)))
 
 (defun nnmaild--data-article-to-file (data number)
