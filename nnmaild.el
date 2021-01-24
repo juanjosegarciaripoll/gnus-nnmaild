@@ -241,7 +241,7 @@ or a string with a mail ID."
                                (throw 'return article)))
                            server)
                           nil))))
-         (path (and article (nnmaild--data-article-to-file article))))
+         (path (and article (nnmaild--data-article-to-file nnmaild--data article))))
     (cond
      ((not path)
       (nnheader-report 'nnmaild "No such article: %s" id))
@@ -342,7 +342,7 @@ number and highest message number."
                        (when (member article range)
                          (setq suffix (nnmaild--act-on-suffix suffix action marks)))))
                    (nnmaild--commit-new-suffix prefix suffix art))))
-             (nnmaild--hash))))
+             (nnmaild--data-hash nnmaild--data))))
 
 (deffoo nnmaild-request-update-mark (group article mark)
   (let ((known-mark (cdr (assoc mark '((?R . (read))
@@ -359,7 +359,7 @@ number and highest message number."
   (let* ((file-name-coding-system nnmail-pathname-coding-system)
          (group-dir (nnmaild-group-pathname group server))
          (nnmaild--data (nnmaild--scan-group-dir group-dir))
-         (nnmaild--move-file (nnmaild--data-article-to-file article)))
+         (nnmaild--move-file (nnmaild--data-article-to-file nnmaild--data article)))
     (with-temp-buffer
       (when (file-writable-p nnmaild--move-file)
         (nnheader-insert-file-contents nnmaild--move-file)
@@ -455,7 +455,7 @@ number and highest message number."
 (deffoo nnmaild-set-status (article name value &optional group server)
   (let* ((group-dir (nnmaild-group-pathname group server))
          (nnmaild--data (nnmaild--scan-group-dir group-dir))
-         (file (nnmaild--data-article-to-file article)))
+         (file (nnmaild--data-article-to-file nnmaild--data article)))
     (cond
      ((not (file-exists-p file))
       (nnheader-report 'nnmaild "File %s does not exist" file))
@@ -822,12 +822,12 @@ or by recreating it from scratch."
                (nnmaild--hash))
       nil)))
 
-(defun nnmaild--data-article-to-file (number)
-  (when-let ((hash (nnmaild--hash))
+(defun nnmaild--data-article-to-file (data number)
+  (when-let ((hash (nnmaild--data-hash data))
              (prefix (gethash number hash nil))
              (record (gethash prefix hash nil)))
     (expand-file-name (concat "cur/" prefix (nnmaild--art-suffix record))
-                      (nnmaild--data-path nnmaild--data))))
+                      (nnmaild--data-path data))))
 
 (defun nnmaild--data-delete-article (number)
   (let* ((hash (nnmaild--hash))
