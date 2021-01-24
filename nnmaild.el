@@ -101,8 +101,8 @@ name.")
                (:constructor nnmaild--make-data (min max hash path mtime)))
   min max hash path mtime)
 
-(defsubst nnmaild--allocate ()
-  (cl-incf (nnmaild--data-max nnmaild--data)))
+(defsubst nnmaild--data-allocate-article (data)
+  (cl-incf (nnmaild--data-max data)))
 
 (defsubst nnmaild--copy-data (data)
   (nnmaild--make-data
@@ -125,9 +125,6 @@ name.")
 
 (defsubst nnmaild--max ()
   (nnmaild--data-max nnmaild--data))
-
-(defsubst nnmaild--hash ()
-  (nnmaild--data-hash nnmaild--data))
 
 (cl-defstruct (nnmaild--art
                (:constructor nnmaild--make-art (number suffix nov))
@@ -412,7 +409,7 @@ number and highest message number."
                             nnmaild--move-file cur-file)
            ;; File has been simply renamed. We do not need to delete it.
            (setq nnmaild--move-file nil)
-           (cons group (nnmaild--data-insert-file cur-file)))
+           (cons group (nnmaild--data-insert-file nnmaild--data cur-file)))
           ((file-exists-p tmp-file)
            (nnheader-report 'nnmaild "Temporary file %s exists. Should never happen!"
                             tmp-file)
@@ -423,7 +420,7 @@ number and highest message number."
                                   'no-message nil 'excl)
                     (rename-file tmp-file cur-file nil)
                     (nnheader-report 'nnmaild "Stored message into file %S" cur-file)
-                    (cons group (nnmaild--data-insert-file cur-file)))
+                    (cons group (nnmaild--data-insert-file nnmaild--data cur-file)))
              (error
               (delete-file tmp-file)
               nil))))))
@@ -769,10 +766,10 @@ has changed, and preemptively loading NOV structures, if absent."
          (old-hash (and old-data (nnmaild--data-hash old-data)))
          (regex (nnmaild--split-prefix-regex)))
     (dolist (path files)
-      (nnmaild--data-insert-file path regex old-hash))
+      (nnmaild--data-insert-file nnmaild--data path regex old-hash))
     nnmaild--data))
 
-(defun nnmaild--data-insert-file (path &optional regex old-hash)
+(defun nnmaild--data-insert-file (data path &optional regex old-hash)
   "Inserts a new message into nnmaild--data, or recovers the information from
 a preexisting hash. Returns the old article number, or a newly computed one."
   (let ((f (file-name-nondirectory path)))
@@ -780,14 +777,15 @@ a preexisting hash. Returns the old article number, or a newly computed one."
       (let* ((prefix (match-string 1 f))
              (suffix (match-string 2 f))
              (old-record (and old-hash (gethash prefix old-hash nil)))
+             (hash (nnmaild--data-hash data))
              article-number)
         (if old-record
             (setf (nnmaild--art-suffix old-record) suffix
                   article-number (nnmaild--art-number old-record))
-          (setf article-number (nnmaild--allocate)
+          (setf article-number (nnmaild--data-allocate-article data)
                 old-record (nnmaild--make-art article-number suffix nil)))
-        (puthash prefix old-record (nnmaild--hash))
-        (puthash article-number prefix (nnmaild--hash))
+        (puthash prefix old-record hash)
+        (puthash article-number prefix hash)
         article-number))))
 
 (defun nnmaild--scan-group-dir (group-dir)
