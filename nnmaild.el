@@ -223,10 +223,10 @@ name.")
 
 (deffoo nnmaild-request-regenerate (server)
   "Regenerate server information."
-  (let ((record server))
-    (rplacd record (nnmaild--create-list-of-groups nnmaild-directory
-                                                   nnmaild-recurse)))
-  t)
+  (let ((record (assoc server nnmaild-server-alist)))
+    (when record
+      (rplacd record (nnmaild--create-list-of-groups nnmaild-directory
+                                                   nnmaild-recurse)))))
 
 (deffoo nnmaild-request-article (id &optional group server buffer)
   "Request the article denoted by ID from GROUP. ID can be an article number
