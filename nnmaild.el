@@ -174,7 +174,7 @@ name.")
             (erase-buffer)
 	        (dolist (article sequence)
               (when (and (>= article min) (<= article max))
-                (when-let ((nov (nnmaild--article-nov article)))
+                (when-let ((nov (nnmaild--data-article-nov nnmaild--data article)))
                   (insert nov)))))
           'nov)))))
 
@@ -799,15 +799,16 @@ or by recreating it from scratch."
          (nnmaild--data-update nnmaild--data group-dir))
       nnmaild--data)))
 
-(defun nnmaild--article-nov (article)
-  (when-let ((prefix (gethash article (nnmaild--hash)))
-             (art (gethash prefix (nnmaild--hash))))
+(defun nnmaild--data-article-nov (data article)
+  (when-let* ((hash (nnmaild--data-hash data))
+              (prefix (gethash article hash))
+              (art (gethash prefix hash)))
     (or (nnmaild--art-nov art)
         (setf (nnmaild--art-nov art)
               (nnmaild--load-article-nov
                (expand-file-name (concat prefix (nnmaild--art-suffix art))
                                  (expand-file-name "cur"
-                                                   (nnmaild--data-path nnmaild--data)))
+                                                   (nnmaild--data-path data)))
                article)))))
 
 (defun nnmaild--data-find-id (id)
