@@ -328,21 +328,31 @@ SERVER defaults to the backend's current server."
     (maphash (lambda (prefix art)
                (when (stringp prefix)
                  (let ((article (nnmaild--art-number art))
-                       (suffix (nnmaild--art-suffix art)))
+                       (suffix (nnmaild--art-suffix art))
+                       changed)
                    (dolist (triplet actions)
                      (let ((range (car triplet))
                            (action (cadr triplet))
                            (marks (caddr triplet)))
                        (when (member article range)
-                         (setq suffix (nnmaild--act-on-suffix suffix action marks)))))
-                   (nnmaild--commit-new-suffix data prefix suffix art))))
-             (nnmaild--data-hash data))))
+                         (nnheader-report 'nnmaild "Updating article %s" prefix)
+                         (setq changed t
+                               suffix (nnmaild--act-on-suffix suffix action marks)))))
+                   (when changed
+                     (nnmaild--commit-new-suffix data prefix suffix art)))))
+             (nnmaild--data-hash data))
+    t))
+
+(defconst nnmaild--mark-action-map
+  `((?R . (add (read)))
+    (,(elt " " 0)  . (del (read)))
+    (?! . (add (tick))))
+  "Alist from Gnus mark characters to actions that have to be performed
+onto the messages.")
 
 (deffoo nnmaild-request-update-mark (group article mark)
-  (let ((known-mark (cdr (assoc mark '((?R . (read))
-                                       (?! . (tick)))))))
-    (when known-mark
-      (nnmaild-request-set-mark group `(((,article) add ,known-mark)))))
+  (when-let ((action-and-mark (cdr (assoc mark nnmaild--mark-action-map))))
+    (nnmaild-request-set-mark group `(((,article) ,@action-and-mark))))
   mark)
 
 (deffoo nnmaild-request-expire-articles (articles group &optional server force)
