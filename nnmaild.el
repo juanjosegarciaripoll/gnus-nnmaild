@@ -555,15 +555,15 @@ See `nnmaildir-flag-mark-mapping'."
   (cdr (assq flag nnmaild-flag-mark-mapping)))
 
 (defun nnmaild--suffix-to-marks (suffix)
-  (when (and (length suffix)
-             (stringp suffix)
-             (string-match "2,\\([A-Z]*\\)$" suffix))
-    (let ((flags (match-string 1 suffix)))
-      (cl-map 'list 'nnmaild--flag-to-mark flags))))
+  (and (length suffix)
+       (stringp suffix)
+       (string-match "2,\\([A-Z]*\\)$" suffix)
+	   (remq nil (mapcar 'nnmaild--flag-to-mark
+						 (match-string 1 suffix)))))
 
 (defun nnmaild--marks-to-suffix (marks)
   (concat (nnmaild-flag-separator) "2,"
-          (cl-map 'string 'nnmaild--mark-to-flag marks)))
+          (apply 'string (remq nil (mapcar 'nnmaild--mark-to-flag marks)))))
 
 (defun nnmaild--act-on-suffix (suffix action marks)
   (let* ((old-marks (nnmaild--suffix-to-marks suffix))
