@@ -483,14 +483,15 @@ absolute path that is removed from GROUP-PATH to create GROUP-NAME."
   (let ((file-name-coding-system nnmail-pathname-coding-system)
         (root (or root directory))
         output)
-	(dolist (group-dir (cl-remove-if-not 'nnmaild--valid-maildir-p
+	(dolist (group-dir (cl-remove-if-not 'file-directory-p
                                          (nnheader-directory-files
                                           (expand-file-name directory)
                                           t "^[^.].*" t)))
-      (nnheader-report 'nnmaild "Registering group dir %s" group-dir)
-	  (push (cons (nnmaild--make-group-name group-dir root)
-                  group-dir)
-			output)
+	  (when (nnmaild--valid-maildir-p group-dir)
+		(nnheader-report 'nnmaild "Registering group dir %s" group-dir)
+		(push (cons (nnmaild--make-group-name group-dir root)
+					group-dir)
+			  output))
 	  (when recurse
 	    (setq output (nconc (nnmaild--create-list-of-groups group-dir recurse root)
                             output))))
@@ -509,8 +510,12 @@ expected folders."
 (defun nnmaild--make-group-name (directory root)
   "Creates a group name from a DIRECTORY file name, by
 subtracting ROOT, and creating a string with valid characters."
-  (string-trim (file-relative-name directory root)
-               "[/\\\\]" "[/\\\\]"))
+  (nnheader-replace-chars-in-string
+   (nnheader-replace-chars-in-string
+	(string-trim (file-relative-name directory root)
+				 "[/\\\\]" "[/\\\\]")
+	?/ ?.)
+   ?\\ ?.))
 
 (defun nnmaild--mapc-groups (fn server)
   "Call FN once for each group in SERVER. The function should
