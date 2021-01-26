@@ -327,9 +327,9 @@ SERVER defaults to the backend's current server."
          (data (nnmaild--scan-group-dir group-dir)))
     (maphash (lambda (prefix art)
                (when (stringp prefix)
-                 (let ((article (nnmaild--art-number art))
-                       (suffix (nnmaild--art-suffix art))
-                       changed)
+                 (let* ((article (nnmaild--art-number art))
+						(suffix (nnmaild--art-suffix art))
+						changed)
                    (dolist (triplet actions)
                      (let ((range (car triplet))
                            (action (cadr triplet))
@@ -345,7 +345,7 @@ SERVER defaults to the backend's current server."
 
 (defconst nnmaild--mark-action-map
   `((?R . (add (read)))
-    (,(elt " " 0)  . (del (read)))
+    (,(elt " " 0)  . (del (read tick)))
     (?! . (add (tick))))
   "Alist from Gnus mark characters to actions that have to be performed
 onto the messages.")
@@ -403,7 +403,8 @@ by some mail synchronization software."
   (let* ((coding-system-for-write nnheader-file-coding-system)
          (group-dir (nnmaild-group-pathname group server))
          (data (nnmaild--scan-group-dir group-dir))
-         (extension (and nnmaild--move-file (file-name-extension nnmaild--move-file)))
+         (extension (and nnmaild--move-file
+						 (nnmaild--message-file-suffix nnmaild--move-file)))
          (output-file (nnmaild--tmp-file-name extension))
          (cur-dir (expand-file-name "cur" group-dir))
          (cur-file (expand-file-name output-file cur-dir))
@@ -450,14 +451,13 @@ by some mail synchronization software."
 (defun nnmaild--tmp-file-name (&optional extension)
   "Return a hopefully unique and valid name for a message file."
   (let ((time (current-time)))
-    (format "%sR%x%sP%dQ%d%s2,%s"
+    (format "%sR%x%sP%dQ%d%s"
             (format-time-string "#%s" time) ;; A monotonously increasing number
             (random) ;; Not cryptographically random, but good enough
             (format-time-string "M%6N" time)
             (emacs-pid)
             (cl-incf nnmaild-delivery-count)
-            (nnmaild-flag-separator)
-			(or extension ""))))
+			(or extension (concat (nnmaild--flag-separator) "2,")))))
 
 (deffoo nnmaild-request-post (&optional server)
   nil)
@@ -599,6 +599,7 @@ See `nnmaildir-flag-mark-mapping'."
                    (when (memq 'forward marks)
                      (push article forward))
                    (when (memq 'tick marks)
+					 (nnheader-report 'nnmaild "Article %S flagged" art)
                      (push article flagged)))))
              (nnmaild--data-hash data))
     (when (or read flagged replied)
@@ -606,7 +607,7 @@ See `nnmaildir-flag-mark-mapping'."
         ,@(when flagged
             `((tick ,@(gnus-compress-sequence (sort flagged '<)))))
         ,@(when forward
-            `((tick ,@(gnus-compress-sequence (sort forward '<)))))
+            `((forward ,@(gnus-compress-sequence (sort forward '<)))))
         ,@(when replied
             `((reply ,@(gnus-compress-sequence (sort replied '<)))))))))
 
@@ -615,6 +616,7 @@ See `nnmaildir-flag-mark-mapping'."
          (data (nnmaild--scan-group-dir group-dir)))
     (when info
       (let ((marks (nnmaild--data-collect-marks data)))
+		(nnheader-report 'nnmaild "Marks for group %s are %S" group marks)
         (nnmaild--update-info marks info)
         (nnmaild--store-info info (gnus-active (gnus-info-group info)))))
     data))
@@ -808,6 +810,10 @@ a preexisting hash. Returns the old article number, or a newly computed one."
         (puthash prefix old-record hash)
         (puthash article-number prefix hash)
         article-number))))
+
+(defun nnmaild--message-file-suffix (file-name)
+  (and (string-match (nnmaild--split-prefix-regex) file-name)
+	   (match-string 2 file-name)))
 
 (defun nnmaild--scan-group-dir (group-dir)
   "Return the nnmaild--data structure for the given group, either from the
