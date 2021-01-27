@@ -54,6 +54,11 @@ as the server remains open.
 
 MEMORY+FILE implies both FILE and MEMORY.")
 
+(defvoo nnmaild-trash-group nil
+  "If non-nil, folder where messages are moved to during
+deletion. If not assigned, the backend will refuse to expire or
+delete messages.")
+
 (defvoo nnmaild-cache-expiration-strategy 'directory-mtime
   "Recipe to determine whether a previous cache of message
 information has expired and needs to be recreated.
@@ -360,7 +365,41 @@ onto the messages.")
   mark)
 
 (deffoo nnmaild-request-expire-articles (articles group &optional server force)
-  nil)
+  "Expire ARTICLES from GROUP and SERVER. The behavior of this function is
+determined by nnmaild-trash-group. If GROUP is the trash group, messages are
+deleted; we return the list of articles for which deletion failed. Otherwise,
+we refuse to expire emails, unless a trash group is defined. And in that case
+expiration happens by moving the messages to the trash folder."
+  (cond ((null nnmaild-trash-group)
+		 (nnheader-report 'nnmaild "Refusing to expire messages because Trash group is not defined.")
+		 articles)
+		((string-equal group nnmaild-trash-group)
+		 ;; If we are in the trash folder, we delete all marked emails
+		 (let ((file-name-coding-system nnmail-pathname-coding-system)
+			   (data (nnmaild--scan-group-dir (nnmaild-group-pathname group server))))
+		   (delq nil (mapcar (lambda (article)
+							   (condition-case nil
+								   (let ((file (nnmaild--data-article-to-file data article)))
+									 (progn (delete-file file t) nil))
+								 (error
+								  (nnheader-report 'nnmaild "Unable to delete file %s" file)
+								  article)))
+							 articles))))
+		((null force)
+		 (nnheader-report 'nnmaild "Refusing to optionally expire messages from non-trash folders.")
+		 articles)
+		(t
+		 (let (not-moved)
+		   (while articles
+			 (let* ((article (pop articles))
+					(last (not articles)))
+			   (unless
+				   (nnmaild-request-move-article
+					article group server
+					`(nnmaild-request-accept-article ,nnmaild-trash-group ,server ,last)
+					last t)
+				 (push article not-moved))))
+		   (nreverse not-moved)))))
 
 (deffoo nnmaild-request-move-article
     (article group server accept-form &optional last move-is-internal)
