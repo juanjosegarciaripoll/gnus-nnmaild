@@ -184,12 +184,13 @@ name.")
     (nnmaild-close-server)
     (nnheader-report 'nnmaild "Not a directory: %s" nnmaild-directory))
    (t
-    (push (cons server (nnmaild--create-list-of-groups nnmaild-directory
-                                                       nnmaild-recurse))
-          nnmaild-server-alist)
-    (nnheader-report 'nnmaild "Opened server %s using directory %s"
-		             server nnmaild-directory)
-    t)))
+	(let ((server-groups (nnmaild--create-list-of-groups nnmaild-directory
+                                                       nnmaild-recurse)))
+      (push (cons server server-groups) nnmaild-server-alist)
+      (nnheader-report 'nnmaild "Opened server %s using directory %s"
+		               server nnmaild-directory)
+	  (nnheader-report 'nnmaild "Found these groups %s" server-groups)
+	  t))))
 
 (deffoo nnmaild-close-server (&optional server defs)
   (nnmaild--delete-queued-files)
@@ -344,9 +345,12 @@ SERVER defaults to the backend's current server."
     t))
 
 (defconst nnmaild--mark-action-map
-  `((?R . (add (read)))
-    (,(elt " " 0)  . (del (read tick)))
-    (?! . (add (tick))))
+  `((,gnus-unread-mark . (del (read tick)))
+    (,gnus-read-mark . (add (read)))
+    (,gnus-catchup-mark . (add (read)))
+    (,gnus-replied-mark . (add (reply)))
+    (,gnus-forwarded-mark . (add (forward)))
+    (,gnus-ticked-mark . (add (tick))))
   "Alist from Gnus mark characters to actions that have to be performed
 onto the messages.")
 
@@ -679,9 +683,13 @@ relative to group-dir. Return true if any file was moved."
     (when files
       (let ((dest (expand-file-name "cur" group-dir)))
         (dolist (f files)
-          (rename-file orig (expand-file-name (file-name-nondirectory orig)
-                                              dest)
-                       t)))
+		  (nnheader-report 'nnmaild "Moving new message %s to %s"
+						   f (expand-file-name (file-name-nondirectory f)
+                                           dest))
+          (rename-file f (expand-file-name (file-name-nondirectory f)
+                                           dest)
+                       t)
+		  ))
       t)))
 
 (defun nnmaild--file-newer-than (file mtime)
@@ -727,15 +735,21 @@ from file if the nnmaild-cache-strategy allows it."
 (defun nnmaild--data-to-cache (data)
   "Save the nnmaild--data structure, either to memory or to file if the
 nnmaild-cache-strategy allows it."
-  (when nnmaild-cache-strategy
-    (let ((group-dir (nnmaild--data-path data)))
-      (if (or (eq nnmaild-cache-strategy 'memory+file)
-              (eq nnmaild-cache-strategy 'memory))
-          (let ((record (assoc group-dir nnmaild-cache)))
-            (if record
-                (rplacd record data)
-              (push (cons group-dir data) nnmaild-cache)))
-        (nnmaild--save-data-file data))))
+  (let ((group-dir (nnmaild--data-path data))
+		record)
+	(cond ((eq nnmaild-cache-strategy 'file)
+		   (nnheader-report 'nnmaild "Saving cache to file in directory %s" group-dir)
+		   (nnmaild--save-data-file data))
+		  ((not (or (eq nnmaild-cache-strategy 'memory+file)
+					(eq nnmaild-cache-strategy 'memory)))
+		   (nnheader-report 'nnmaild "Unknown cache strategy %S" nnmaild-cache-strategy)
+		   nil)
+		  ((setq record (assoc group-dir nnmaild-cache))
+		   (nnheader-report 'nnmaild "Replacing memory cache for directory %s" group-dir)
+           (rplacd record data))
+		  (t
+		   (nnheader-report 'nnmaild "Adding new memory cache for directory %s" group-dir)
+           (push (cons group-dir data) nnmaild-cache))))
   data)
 
 (defun nnmaild--load-data-file (group-dir)
@@ -821,10 +835,13 @@ cache (see nnmaild-cache-strategy and nnmaild-cache-expiration-strategy),
 or by recreating it from scratch."
   (let* ((group-dir (string-trim (expand-file-name group-dir) nil "[/\\]"))
          (data (nnmaild--data-from-cache group-dir)))
-    (if (or (null data) (nnmaild--data-expired-p data))
-        (nnmaild--data-to-cache
-         (nnmaild--data-update data group-dir))
-      data)))
+    (cond ((or (null data) (nnmaild--data-expired-p data))
+		   (nnheader-report 'nnmaild "Cache for group dir %s expired" group-dir)
+           (nnmaild--data-to-cache
+			(nnmaild--data-update data group-dir)))
+		  (t
+		   (nnheader-report 'nnmaild "Cache for group dir %s still valid" group-dir)
+		   data))))
 
 (defun nnmaild--data-article-nov (data article)
   (when-let* ((hash (nnmaild--data-hash data))
