@@ -1,6 +1,6 @@
 # New Maildir backend for Gnus
 
-Version: 0.4
+Version: 0.5
 
 ## Motivation
 
@@ -42,11 +42,9 @@ The following variables apply to the backend:
   - `directory-mtime` means that we only refresh the cache when the list of files in a directory has been changed, due to new files, renaming, etc. It is a rather safe and fast way.
   - `file-nmtime` means that instead of looking at the directory, we look at a specific file, with a name given by `nnmaild-cache-control-file` that is updated by the Maildir synchronization software. For instance, `isync` uses `.mbsyncstate`.
 
+- `nnmaild-trash-group` is the name of a group in the `nnmaild` server. If this group exists, it is used for forcibly deleting emails (as per `gnus-summary-delete-article`).
 
 ## Status
-
-This **has not** been implemented:
-- nnmaild-request-expire-articles
 
 These are **unlikely to be implemented**. For efficiency and consistency, the backend asssumes that the content of messages is immutable, and that groups exist for as long a server is open:
 - Creating, deleting or renaming folders (AKA groups)

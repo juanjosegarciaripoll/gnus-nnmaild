@@ -84,7 +84,7 @@ the Maildir folder directory, or it can be an absolute file
 name.")
 
 
-(defconst nnmaild-version "nnmaild 0.4"
+(defconst nnmaild-version "nnmaild 0.5"
   "nnmaild version.")
 
 (defvoo nnmaild-server-alist nil
@@ -380,7 +380,9 @@ expiration happens by moving the messages to the trash folder."
 		   (delq nil (mapcar (lambda (article)
 							   (condition-case nil
 								   (let ((file (nnmaild--data-article-to-file data article)))
-									 (progn (delete-file file t) nil))
+									 (delete-file file t)
+									 (nnheader-report 'nnmaild "File %s deleted" file)
+									 nil)
 								 (error
 								  (nnheader-report 'nnmaild "Unable to delete file %s" file)
 								  article)))
